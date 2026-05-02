@@ -4,58 +4,55 @@ from pydantic import BaseModel, Field
 import asyncio
 import logging
 from typing import Optional
+from dotenv import load_dotenv
 import os
 
-from services.hf_client import query_hf_with_retry, HFAPIError
+load_dotenv()
+
+from services.hf_client import query_hf_with_retry
 from services.output_parser import (
-    parse_sentiment_output,
-    parse_summarization_output,
-    parse_text_generation,
-    parse_bias_detection_response,
     SentimentLabel,
     BiasLevel,
 )
-from services.text_manager import TextTruncationManager, get_truncation_warning
-from prompts import get_bias_prompt
+from services.text_manager import TextTruncationManager
 
 # ============================================================================
-# Logging Configuration
+# ENV CHECK
 # ============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+HF_API_KEY = os.getenv("HF_API_KEY")
+
+if not HF_API_KEY:
+    raise ValueError("❌ HF_API_KEY not found")
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# FastAPI App Setup
-# ============================================================================
-app = FastAPI(
-    title="Political Text Analysis API",
-    description="Analyze political text for tone, bias, and summary",
-    version="1.0.0"
-)
+DEBUG_MODE = True
 
-# CORS Configuration for React frontend
+# ============================================================================
+# APP
+# ============================================================================
+app = FastAPI(title="Political Analysis API", version="4.0 FIXED")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev servers
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ============================================================================
-# Pydantic Models
+# MODELS
 # ============================================================================
+SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+STANCE_MODEL = "facebook/bart-large-mnli"
+SUMMARIZATION_MODEL = "facebook/bart-large-cnn"
 
 class AnalysisRequest(BaseModel):
-    text: str = Field(
-        ...,
-        min_length=1,
-        max_length=5000,
-        description="Text to analyze (max 5000 characters)"
-    )
+    text: str = Field(..., min_length=1, max_length=5000)
 
 class AnalysisResponse(BaseModel):
     tone: SentimentLabel
@@ -68,277 +65,191 @@ class AnalysisResponse(BaseModel):
     truncation_warning: Optional[str] = None
 
 # ============================================================================
-# Model Constants
+# 🔥 NORMALIZER (KEY FIX)
 # ============================================================================
-SENTIMENT_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
-SUMMARIZATION_MODEL = "facebook/bart-large-cnn"
-BIAS_MODEL = "google/flan-t5-large"
+def normalize_response(response):
+    """
+    Converts ANY HF response into clean list format
+    """
+    if isinstance(response, list):
+
+        # sentiment case: [[{...}]]
+        if len(response) > 0 and isinstance(response[0], list):
+            return response[0]
+
+        return response
+
+    return response
 
 # ============================================================================
-# Analysis Functions
+# SENTIMENT
 # ============================================================================
-
 async def get_sentiment_analysis(text: str) -> dict:
-    """
-    Analyze sentiment (tone) of the text.
-    Returns: {"label": SentimentLabel, "score": float, "confidence": str}
-    """
     try:
-        logger.info(f"Analyzing sentiment for {len(text)} chars")
-        
         response = await query_hf_with_retry(
             SENTIMENT_MODEL,
-            {"inputs": text},
-            max_retries=3
+            {"inputs": text}
         )
-        
-        result = parse_sentiment_output(response)
-        logger.info(f"Sentiment: {result.label} (score: {result.score})")
-        
+
+        if DEBUG_MODE:
+            logger.info(f"\n🔥 SENTIMENT RAW:\n{response}\n")
+
+        data = normalize_response(response)
+
+        top = data[0]
+        label = top["label"].lower()
+        score = top["score"]
+
+        if label == "positive":
+            final = SentimentLabel.POSITIVE
+        elif label == "negative":
+            final = SentimentLabel.NEGATIVE
+        else:
+            final = SentimentLabel.NEUTRAL
+
         return {
-            "label": result.label,
-            "score": result.score,
-            "confidence": result.confidence
-        }
-    
-    except HFAPIError as e:
-        logger.error(f"Sentiment API error: {str(e)}")
-        # Fallback
-        return {
-            "label": SentimentLabel.NEUTRAL,
-            "score": 0.5,
-            "confidence": "low"
-        }
-    except Exception as e:
-        logger.error(f"Unexpected error in sentiment analysis: {str(e)}")
-        return {
-            "label": SentimentLabel.NEUTRAL,
-            "score": 0.5,
-            "confidence": "low"
+            "label": final,
+            "score": float(score),
+            "confidence": "high" if score > 0.8 else "medium",
+            "raw": response
         }
 
-async def get_summary_analysis(text: str) -> str:
-    """
-    Summarize the text.
-    Returns: summary_text (str)
-    """
+    except Exception as e:
+        logger.error(f"Sentiment error: {e}")
+        return {
+            "label": SentimentLabel.NEUTRAL,
+            "score": 0.5,
+            "confidence": "low",
+            "raw": str(e)
+        }
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+async def get_summary_analysis(text: str) -> dict:
     try:
-        # Truncate to BART input limit
         truncated_text, _ = TextTruncationManager.truncate_with_strategy(
             text, task="summarization", strategy="smart"
         )
-        
-        logger.info(f"Summarizing {len(truncated_text)} chars")
-        
+
         response = await query_hf_with_retry(
             SUMMARIZATION_MODEL,
-            {"inputs": truncated_text},
-            max_retries=3
+            {"inputs": truncated_text}
         )
-        
-        summary = parse_summarization_output(response)
-        logger.info(f"Summary generated: {len(summary)} chars")
-        
-        return summary
-    
-    except HFAPIError as e:
-        logger.error(f"Summarization API error: {str(e)}")
-        # Fallback: return first 200 chars
-        return text[:200] + "..." if len(text) > 200 else text
-    except Exception as e:
-        logger.error(f"Unexpected error in summarization: {str(e)}")
-        return "Summary generation failed."
 
+        if DEBUG_MODE:
+            logger.info(f"\n🧠 SUMMARY RAW:\n{response}\n")
+
+        data = normalize_response(response)
+
+        summary = data[0]["summary_text"]
+
+        return {
+            "summary": summary,
+            "raw": response
+        }
+
+    except Exception as e:
+        logger.error(f"Summary error: {e}")
+        return {
+            "summary": text[:200],
+            "raw": str(e)
+        }
+
+# ============================================================================
+# BIAS
+# ============================================================================
 async def get_bias_analysis(text: str) -> dict:
-    """
-    Detect political bias in the text.
-    Returns: {"bias": BiasLevel, "score": float, "explanation": str}
-    """
     try:
-        # Truncate to bias model input limit
         truncated_text, _ = TextTruncationManager.truncate_with_strategy(
-            text, task="bias_detection", strategy="smart"
+            text, task="bias_detection", strategy="minimal"
         )
-        
-        logger.info(f"Analyzing bias for {len(truncated_text)} chars")
-        
-        # Get appropriate prompt variant based on text length
-        prompt = get_bias_prompt(truncated_text, variant="few_shot")
-        
+
+        labels = [
+            "strongly critical of government",
+            "somewhat critical of government",
+            "neutral political statement",
+            "supportive of government"
+        ]
+
         response = await query_hf_with_retry(
-            BIAS_MODEL,
-            {"inputs": prompt},
-            max_retries=3,
-            read_timeout=45  # Bias detection can take longer
+            STANCE_MODEL,
+            {
+                "inputs": truncated_text,
+                "parameters": {"candidate_labels": labels}
+            }
         )
-        
-        # Extract generated text from response
-        generated_text = parse_text_generation(response, prompt=prompt)
-        
-        # Parse the generated text into structured format
-        bias_result = parse_bias_detection_response(generated_text)
-        
-        logger.info(f"Bias: {bias_result.bias_level} (score: {bias_result.score})")
-        
+
+        if DEBUG_MODE:
+            logger.info(f"\n⚖️ BIAS RAW:\n{response}\n")
+
+        data = normalize_response(response)
+
+        top = data[0]
+        label = top["label"].lower()
+        score = top["score"]
+
+        if "neutral" in label:
+            bias = BiasLevel.LOW
+            explanation = "Neutral stance"
+        elif "supportive" in label:
+            bias = BiasLevel.LOW
+            explanation = "Supportive stance"
+        elif "somewhat critical" in label:
+            bias = BiasLevel.MEDIUM
+            explanation = "Moderate criticism"
+        else:
+            bias = BiasLevel.HIGH
+            explanation = "Strong criticism"
+
         return {
-            "bias": bias_result.bias_level,
-            "score": bias_result.score,
-            "explanation": bias_result.explanation
+            "bias": bias,
+            "score": round(float(score), 3),
+            "explanation": explanation,
+            "raw": response
         }
-    
-    except HFAPIError as e:
-        logger.error(f"Bias detection API error: {str(e)}")
-        # Fallback
-        return {
-            "bias": BiasLevel.MEDIUM,
-            "score": 3.0,
-            "explanation": "Analysis inconclusive"
-        }
+
     except Exception as e:
-        logger.error(f"Unexpected error in bias analysis: {str(e)}")
+        logger.error(f"Bias error: {e}")
         return {
             "bias": BiasLevel.MEDIUM,
-            "score": 3.0,
-            "explanation": "Analysis inconclusive"
+            "score": 0.5,
+            "explanation": "Failed",
+            "raw": str(e)
         }
 
 # ============================================================================
-# API Endpoints
+# MAIN PIPELINE
 # ============================================================================
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "ok", "service": "Political Text Analysis API"}
-
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze(request: AnalysisRequest):
-    """
-    Analyze political text for tone, bias, and summary.
-    
-    Args:
-        request: AnalysisRequest with 'text' field
-    
-    Returns:
-        AnalysisResponse with tone, bias, and summary analysis
-    """
     try:
         text = request.text.strip()
-        
-        if not text:
-            raise HTTPException(status_code=422, detail="Text cannot be empty")
-        
-        # Truncate with warning tracking
-        truncated_text, truncation_metadata = TextTruncationManager.truncate_with_strategy(
-            text, task="sentiment", strategy="smart"
+
+        sentiment_task = get_sentiment_analysis(text)
+        summary_task = get_summary_analysis(text)
+        bias_task = get_bias_analysis(text)
+
+        sentiment, summary, bias = await asyncio.gather(
+            sentiment_task, summary_task, bias_task
         )
-        
-        logger.info(f"Analyzing text: {len(text)} chars, truncated to {len(truncated_text)} chars")
-        
-        # Run all three analyses in parallel
-        sentiment_task = get_sentiment_analysis(truncated_text)
-        summary_task = get_summary_analysis(truncated_text)
-        bias_task = get_bias_analysis(truncated_text)
-        
-        results = await asyncio.gather(sentiment_task, summary_task, bias_task)
-        
-        sentiment_result = results[0]
-        summary_result = results[1]
-        bias_result = results[2]
-        
-        # Generate truncation warning if applicable
-        truncation_warning = get_truncation_warning(truncation_metadata)
-        
-        logger.info("Analysis complete, returning results")
-        
+
         return AnalysisResponse(
-            tone=sentiment_result["label"],
-            tone_score=sentiment_result["score"],
-            tone_confidence=sentiment_result["confidence"],
-            bias=bias_result["bias"],
-            bias_score=bias_result["score"],
-            bias_explanation=bias_result["explanation"],
-            summary=summary_result,
-            truncation_warning=truncation_warning if truncation_warning else None
+            tone=sentiment["label"],
+            tone_score=sentiment["score"],
+            tone_confidence=sentiment["confidence"],
+            bias=bias["bias"],
+            bias_score=bias["score"],
+            bias_explanation=bias["explanation"],
+            summary=summary["summary"],
+            truncation_warning=None
         )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in /analyze endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail="Analysis failed")
 
-@app.post("/analyze-sentiment")
-async def analyze_sentiment(request: AnalysisRequest):
-    """Analyze sentiment only (lighter weight)"""
-    try:
-        text = request.text.strip()
-        if not text:
-            raise HTTPException(status_code=422, detail="Text cannot be empty")
-        
-        result = await get_sentiment_analysis(text)
-        return result
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error in sentiment-only endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail="Analysis failed")
-
-@app.post("/analyze-summary")
-async def analyze_summary(request: AnalysisRequest):
-    """Summarize text only (lighter weight)"""
-    try:
-        text = request.text.strip()
-        if not text:
-            raise HTTPException(status_code=422, detail="Text cannot be empty")
-        
-        summary = await get_summary_analysis(text)
-        return {"summary": summary}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in summary-only endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail="Analysis failed")
-
-@app.post("/analyze-bias")
-async def analyze_bias(request: AnalysisRequest):
-    """Analyze bias only (lighter weight)"""
-    try:
-        text = request.text.strip()
-        if not text:
-            raise HTTPException(status_code=422, detail="Text cannot be empty")
-        
-        result = await get_bias_analysis(text)
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in bias-only endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail="Analysis failed")
+        logger.error(str(e))
+        raise HTTPException(500, "Analysis failed")
 
 # ============================================================================
-# Root Endpoint
-# ============================================================================
-
-@app.get("/")
-async def root():
-    """Welcome endpoint with API documentation"""
-    return {
-        "message": "Welcome to Political Text Analysis API",
-        "docs": "/docs",
-        "endpoints": {
-            "POST /analyze": "Full analysis (tone, bias, summary)",
-            "POST /analyze-sentiment": "Sentiment only",
-            "POST /analyze-summary": "Summary only",
-            "POST /analyze-bias": "Bias only",
-            "GET /health": "Health check"
-        }
-    }
-
-# ============================================================================
-# Entry point
-# ============================================================================
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/health")
+async def health():
+    return {"status": "OK - FIXED v4.0"}

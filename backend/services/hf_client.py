@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 HF_API_KEY = os.getenv("HF_API_KEY", "")
-HF_API_URL = "https://api-inference.huggingface.co/models"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models"
 
 class HFAPIError(Exception):
     """Custom exception for Hugging Face API errors"""
