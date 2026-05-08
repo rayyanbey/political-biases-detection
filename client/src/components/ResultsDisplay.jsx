@@ -33,17 +33,17 @@ export function ResultsDisplay({ results }) {
 
   const getBiasColor = (cat) => {
     const map = {
-      LOW_BIAS:    "bg-green-50 border-green-200 text-green-800",
+      LOW_BIAS: "bg-green-50 border-green-200 text-green-800",
       MEDIUM_BIAS: "bg-orange-50 border-orange-200 text-orange-800",
-      HIGH_BIAS:   "bg-red-50 border-red-200 text-red-800",
+      HIGH_BIAS: "bg-red-50 border-red-200 text-red-800",
     };
     return map[cat] ?? "bg-gray-50 border-gray-200 text-gray-700";
   };
   const getBiasBadgeColor = (cat) => {
     const map = {
-      LOW_BIAS:    "bg-green-100 text-green-800",
+      LOW_BIAS: "bg-green-100 text-green-800",
       MEDIUM_BIAS: "bg-orange-100 text-orange-800",
-      HIGH_BIAS:   "bg-red-100 text-red-800",
+      HIGH_BIAS: "bg-red-100 text-red-800",
     };
     return map[cat] ?? "bg-gray-100 text-gray-700";
   };
@@ -70,11 +70,10 @@ export function ResultsDisplay({ results }) {
               <p className="text-xs font-semibold opacity-75 mb-1">Confidence</p>
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div
-                  className={`h-2 rounded-full ${
-                    tone === "POSITIVE" ? "bg-green-500"
-                    : tone === "NEGATIVE" ? "bg-red-500"
-                    : "bg-gray-500"
-                  }`}
+                  className={`h-2 rounded-full ${tone === "POSITIVE" ? "bg-green-500"
+                      : tone === "NEGATIVE" ? "bg-red-500"
+                        : "bg-gray-500"
+                    }`}
                   style={{ width: `${toneConfidence * 100}%` }}
                 />
               </div>
@@ -105,11 +104,10 @@ export function ResultsDisplay({ results }) {
               <div className="flex items-center gap-2">
                 <div className="flex-grow bg-gray-200 rounded-full h-2">
                   <div
-                    className={`h-2 rounded-full ${
-                      biasCategory === "LOW_BIAS" ? "bg-green-500"
-                      : biasCategory === "MEDIUM_BIAS" ? "bg-orange-500"
-                      : "bg-red-500"
-                    }`}
+                    className={`h-2 rounded-full ${biasCategory === "LOW_BIAS" ? "bg-green-500"
+                        : biasCategory === "MEDIUM_BIAS" ? "bg-orange-500"
+                          : "bg-red-500"
+                      }`}
                     style={{ width: `${biasConfidence * 100}%` }}
                   />
                 </div>
@@ -148,14 +146,25 @@ export function ResultsDisplay({ results }) {
         <div className="mt-6 border-2 rounded-lg p-6 bg-white">
           <h3 className="text-lg font-bold mb-3">🧑‍⚖️ Judge Evaluation</h3>
           <div className="mb-3">
-            <p className="text-xs font-semibold opacity-75 mb-1">Score</p>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className={`h-2 rounded-full bg-indigo-600`}
-                style={{ width: `${judgeScore}%` }}
-              />
+            <p className="text-xs font-semibold opacity-75 mb-1">
+              Analysis Verdict
+            </p>
+
+            <div className="inline-flex items-center px-3 py-1 rounded-full bg-indigo-100 text-indigo-700 text-sm font-semibold">
+              {judgeScore >= 85
+                ? "Excellent Analysis"
+                : judgeScore >= 70
+                  ? "Good Analysis"
+                  : judgeScore >= 50
+                    ? "Average Analysis"
+                    : judgeScore >= 30
+                      ? "Poor Analysis"
+                      : "Very Poor Analysis"}
             </div>
-            <p className="text-xs font-medium mt-1 opacity-75">{judgeScore}%</p>
+
+            <p className="text-xs font-medium mt-1 opacity-75">
+              Score: {judgeScore}%
+            </p>
           </div>
           <div className="mb-3">
             <p className="text-xs font-semibold opacity-75 mb-1">Explanation</p>

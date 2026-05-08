@@ -205,10 +205,10 @@ async def analyze(req: AnalysisRequest):
             "stance": f"{stance.get('label')} ({stance.get('confidence')})",
             "summary": summary
         }
-
+        print(analysis_snapshot)
         # Run judge evaluation (may add latency)
         judge_result = await evaluate_judge(text, analysis_snapshot)
-
+        print("new /n \n\n",judge_result)
         return {
             "sentiment": sentiment,
             "stance": stance,
