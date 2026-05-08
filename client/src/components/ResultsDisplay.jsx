@@ -50,6 +50,8 @@ export function ResultsDisplay({ results }) {
 
   // ── Summary ────────────────────────────────────────────────────────────────
   const summary = results.summary ?? "No summary available.";
+  const judgeScore = results.judge?.score ?? null;
+  const judgeExplanation = results.judge?.explanation ?? "";
 
   return (
     <div className="space-y-6">
@@ -140,6 +142,33 @@ export function ResultsDisplay({ results }) {
         </div>
 
       </div>
+
+      {/* Judge Card */}
+      {judgeScore !== null && (
+        <div className="mt-6 border-2 rounded-lg p-6 bg-white">
+          <h3 className="text-lg font-bold mb-3">🧑‍⚖️ Judge Evaluation</h3>
+          <div className="mb-3">
+            <p className="text-xs font-semibold opacity-75 mb-1">Score</p>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className={`h-2 rounded-full bg-indigo-600`}
+                style={{ width: `${judgeScore}%` }}
+              />
+            </div>
+            <p className="text-xs font-medium mt-1 opacity-75">{judgeScore}%</p>
+          </div>
+          <div className="mb-3">
+            <p className="text-xs font-semibold opacity-75 mb-1">Explanation</p>
+            <p className="text-sm leading-relaxed">{judgeExplanation}</p>
+          </div>
+          <button
+            onClick={() => copyToClipboard(`Judge: ${judgeScore}% - ${judgeExplanation}`, "judge")}
+            className="w-full py-2 px-3 bg-indigo-100 hover:bg-indigo-200 transition-all rounded text-xs font-semibold text-indigo-900"
+          >
+            {copied === "judge" ? "✓ Copied" : "Copy Judge Result"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

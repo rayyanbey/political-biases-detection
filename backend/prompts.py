@@ -165,3 +165,50 @@ def recommend_prompt_variant(text: str) -> str:
     # For longer texts, use chain-of-thought (more careful reasoning)
     else:
         return "chain_of_thought"
+
+
+# ============================================================================
+# JUDGE PROMPT
+# ============================================================================
+def get_judge_prompt(original_text: str, analysis: dict) -> str:
+        """
+        Build a prompt that asks a judge LLM to evaluate the quality and correctness
+        of model analysis outputs (sentiment, stance, summary).
+
+        The judge is instructed to return strict JSON with keys: score (0-100),
+        explanation (short string).
+        """
+        # build analysis section safely converting values to strings
+        lines = []
+        for k, v in analysis.items():
+                # For nested dicts/lists convert to compact string
+                if isinstance(v, (dict, list)):
+                        val = str(v)
+                else:
+                        val = v
+                lines.append(f"{k}: {val}")
+        analysis_section = "\n".join(lines)
+
+        return f"""
+You are an expert evaluator. Given an original input text and the outputs
+from several automated models (sentiment, stance, summary), evaluate whether
+the outputs are correct, useful, and unbiased.
+
+Original Text: "{original_text}"
+
+Model Analysis:
+{analysis_section}
+
+Instructions:
+- Judge the overall quality and correctness of the provided analysis relative
+    to the original text.
+- Consider: factual consistency, correct sentiment/stance labeling, missing
+    critical context, and clearly wrong or misleading statements.
+- Return a strict JSON object ONLY with two keys:
+    1) "score": integer from 0 to 100 (100 = perfect/correct)
+    2) "explanation": short plain-text explanation (1-2 sentences)
+
+Do NOT include any extra text outside the JSON object.
+
+Output JSON:
+"""

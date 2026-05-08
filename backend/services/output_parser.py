@@ -1,4 +1,5 @@
 import re
+import json
 from enum import Enum
 from typing import Tuple, List, Dict, Any
 from pydantic import BaseModel
@@ -223,3 +224,59 @@ def validate_output_quality(output: str, min_length: int = 10) -> Tuple[bool, st
         return False, "Likely corrupted output"
     
     return True, "Valid"
+
+
+def parse_judge_output(model_output: str) -> dict:
+    """
+    Parse judge LLM output and return a dict with keys: score (int 0-100),
+    explanation (str). Attempts to parse strict JSON first, then falls back
+    to regex extraction.
+    """
+    try:
+        if not model_output or not isinstance(model_output, str):
+            return {"score": 50, "explanation": "No judge output"}
+
+        # Try to locate a JSON object in the output
+        json_match = re.search(r"\{[\s\S]*\}", model_output)
+        if json_match:
+            try:
+                payload = json.loads(json_match.group(0))
+                score = int(payload.get("score", payload.get("score", 50)))
+                explanation = str(payload.get("explanation", ""))
+                score = max(0, min(100, score))
+                if not explanation:
+                    explanation = "No explanation provided"
+                return {"score": score, "explanation": explanation}
+            except Exception:
+                pass
+
+        # Fallback: look for a numeric score in text
+        score_search = re.search(r"(score|rating)[:\s]+(\d{1,3})", model_output, flags=re.IGNORECASE)
+        if score_search:
+            try:
+                score = int(score_search.group(2))
+                score = max(0, min(100, score))
+            except Exception:
+                score = 50
+        else:
+            # Map simple keywords to ranges
+            low_map = r"\b(incorrect|wrong|poor|bad)\b"
+            high_map = r"\b(correct|accurate|good|excellent)\b"
+            if re.search(high_map, model_output, flags=re.IGNORECASE):
+                score = 90
+            elif re.search(low_map, model_output, flags=re.IGNORECASE):
+                score = 20
+            else:
+                score = 50
+
+        # Extract explanation as first two sentences
+        sentences = re.split(r"(?<=[.!?])\s+", model_output.strip())
+        explanation = " ".join(sentences[:2]).strip()
+        if not explanation:
+            explanation = "No explanation available"
+
+        return {"score": int(score), "explanation": explanation}
+
+    except Exception as e:
+        logger.error(f"Error parsing judge output: {str(e)}")
+        return {"score": 50, "explanation": "Parsing failed"}

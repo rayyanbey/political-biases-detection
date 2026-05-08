@@ -11,6 +11,7 @@ load_dotenv()
 
 from services.hf_client import query_hf_with_retry
 from services.text_manager import TextTruncationManager
+from services.judge import evaluate_judge
 
 # =========================================================
 # ENV
@@ -198,10 +199,21 @@ async def analyze(req: AnalysisRequest):
             summary_task
         )
 
+        # Build a compact analysis snapshot for the judge
+        analysis_snapshot = {
+            "sentiment": f"{sentiment.get('label')} ({sentiment.get('confidence')})",
+            "stance": f"{stance.get('label')} ({stance.get('confidence')})",
+            "summary": summary
+        }
+
+        # Run judge evaluation (may add latency)
+        judge_result = await evaluate_judge(text, analysis_snapshot)
+
         return {
             "sentiment": sentiment,
             "stance": stance,
-            "summary": summary
+            "summary": summary,
+            "judge": judge_result
         }
 
     except Exception as e:
